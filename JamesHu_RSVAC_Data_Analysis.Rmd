@@ -1,0 +1,1152 @@
+---
+title: "JamesHu_RSVAC_Data_Analysis"
+output: html_document
+date: "2025-01-21"
+---
+
+```{r}
+#CREDIT: Dumaine et al.
+
+rm(list = ls())
+#Restart R before running 
+
+#RECREATION - REPERTOIRE PLOTS
+if (!(require(pacman))) {install.packages("pacman")}
+pacman::p_load(here, dplyr, tidyr, glue, ggplot2, ggupset, stringr)
+
+# declare constants, load reshape functions
+#install.packages("readxl")
+library(readxl)
+
+args <- list(
+  rsvac = "/Users/jayumshu/Downloads/RSVAC_1989_2015_03_29_20.xlsx",
+  functions = "/Users/jayumshu/Downloads/00-reshape-functions.R"
+)
+
+source(args$functions)
+
+# for nicer plot labels
+plot_rep_elements <- c("Rape",
+                       "Sexual slavery and forced marriage",
+                       "Sexual torture",
+                       "Sexual abuse",
+                       "Sexual mutilation",
+                       "Forced abortion and forced sterilization",
+                       "Forced prostitution")
+
+# ----- functions
+# NB: only plots repertoires reported more than once for the specified actor type
+# Acceptable actor_type inputs are "STATE" or "REBEL"
+repetoire_bar_chart <- function(conflict_actor_data, actor_type, fill_color) {
+
+  conflict_actor_data %>%
+    filter(high_prev & actor_type_lab == !!actor_type) %>%
+    select(id, !!plot_rep_elements, actor_type_lab) %>%
+    gather(element, presence, -id, -actor_type_lab) %>%
+    filter(presence == 1) %>%
+    select(-presence) %>%
+    group_by(id) %>%
+    summarize(Repertoire = paste(unique(element), collapse = " & ")) %>%
+    group_by(Repertoire) %>%
+    summarize(rep = n()) %>%
+    filter(rep > 1) %>%
+    ggplot(aes(x = reorder(Repertoire, -rep), y = rep)) +
+    geom_col(fill = fill_color, width = 0.75) +
+    scale_x_discrete(labels = function(x) str_wrap(str_to_sentence(x), width = 10)) +
+    labs(x = "Repertoire", y = "Count") +
+    theme_minimal()
+
+}
+
+repertoire_upset_plot <- function(conflict_actor_data, high_prev) {
+
+  if (high_prev) {
+
+    conflict_actor_data <- conflict_actor_data %>%
+      filter(high_prev)
+
+  }
+
+  conflict_actor_data %>%
+    select(id, !!plot_rep_elements, actor_type_lab) %>%
+    gather(element, presence, -id, -actor_type_lab) %>%
+    filter(presence == 1) %>%
+    select(-presence) %>%
+    group_by(id, actor_type_lab) %>%
+    summarize(Repertoire = list(unique(element))) %>%
+    ggplot(aes(x = Repertoire, fill=actor_type_lab)) +
+    theme_minimal() +
+    geom_bar(position = "stack") +
+    scale_x_upset(sets = plot_rep_elements, order_by = "freq") +
+    theme_combmatrix(combmatrix.panel.point.color.fill = "black",
+                     combmatrix.panel.line.size = 0,
+                     combmatrix.label.text = element_text(color = "black"),
+                     combmatrix.label.make_space = TRUE) +
+    labs(y = "Count", title = "") +
+    scale_fill_manual(name = "Actor type",
+                      labels = c("Rebel", "State"),
+                      values = c("#8b1a1a", "#1874cd"))
+
+}
+
+# ----- main
+conflict_actor <- make_conflict_actor(load_rsvac(args$rsvac)) %>%
+  filter(actor_type %in% c(1, 3, 5)) %>%
+  mutate(Rape = R,
+         `Sexual slavery and forced marriage` = SS,
+         `Sexual torture` = ST,
+         `Sexual abuse` = SA,
+         `Sexual mutilation` = SM,
+         `Forced prostitution`= FP,
+         `Forced abortion and forced sterilization` = FA,
+         id = glue("{actorid_new}-{conflictid_new}-{actor_type}"),
+         actor_type_lab = if_else(actor_type %in% c(1, 5), "STATE", "REBEL"))
+```
+
+```{r}
+#CREDIT: Dumaine et al.
+
+#RECREATION - REPERTOIRE WIDTH DEPTH
+# ----- setup
+
+if (!(require(pacman))) {install.packages("pacman")}
+pacman::p_load(here, dplyr, knitr)
+
+# declare constants, load reshape functions
+
+args <- list(
+  rsvac = "/Users/jayumshu/Downloads/RSVAC_1989_2015_03_29_20.xlsx",
+  functions = "/Users/jayumshu/Downloads/00-reshape-functions.R"
+)
+
+source(args$functions)
+
+#^This part is kinda unnecessary bc I already do it in the repertoire plots section 
+
+# ----- main
+
+conflict_actor_year <- make_conflict_actor_year(load_rsvac(args$rsvac)) %>%
+  filter(actor_type %in% c(1, 3, 5))
+
+rsvac_actors <- unique(conflict_actor_year$actorid_new)
+rsvac_conflicts <- unique(conflict_actor_year$conflictid_new)
+
+# load all RSVAC obs for states + rebels, including active conflict years with 0
+# prevalences; this is so we can calculate score changes below with all active
+# conflict years for the conflict-actors coded in RSVAC
+rsvac_all <- load_rsvac(args$rsvac) %>%
+  filter(conflictyear == 1 & actor_type %in% c(1, 3, 5)) %>%
+  select(actorid_new, conflictid_new, year, actor_type, gwnoloc) %>%
+  distinct()
+
+con_ac_yr <- merge(conflict_actor_year, rsvac_all, all = TRUE) %>%
+  replace_na(list(FA = 0,
+                  FP = 0,
+                  R = 0,
+                  SA = 0,
+                  SM = 0,
+                  SS = 0,
+                  ST = 0,
+                  hp_FA = 0,
+                  hp_FP = 0,
+                  hp_R = 0,
+                  hp_SA = 0,
+                  hp_SM = 0,
+                  hp_SS = 0,
+                  hp_ST = 0)) %>%
+  mutate(FA_score = (FA + 2 * hp_FA),
+         FP_score = (FP + 2 * hp_FP),
+         R_score = (R + 2 * hp_R),
+         SA_score = (SA + 2 * hp_SA),
+         SM_score = (SM + 2* hp_SM),
+         SS_score = (SS + 2 * hp_SS),
+         ST_score = (ST + 2 * hp_ST),
+         rep_size = (FA + FP + R + SA + SM + SS + ST)) %>%
+  filter(actor_type %in% c(1, 3, 5)) %>%
+  arrange(actorid_new, conflictid_new, year)
+
+units_ <- con_ac_yr %>%
+  select(actorid_new, conflictid_new) %>%
+  distinct()
+
+for(i in 1:nrow(units_)) {
+  temp_ <- con_ac_yr[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                       con_ac_yr$conflictid_new == units_$conflictid_new[i],]
+
+  con_ac_yr$FA_score_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                              con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$FA_score))
+  con_ac_yr$FP_score_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                              con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$FP_score))
+  con_ac_yr$R_score_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                             con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$R_score))
+  con_ac_yr$SA_score_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                              con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$SA_score))
+  con_ac_yr$SM_score_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                              con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$SM_score))
+  con_ac_yr$SS_score_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                              con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$SS_score))
+  con_ac_yr$ST_score_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                              con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$ST_score))
+
+  con_ac_yr$rep_size_change[con_ac_yr$actorid_new == units_$actorid_new[i] &
+                              con_ac_yr$conflictid_new == units_$conflictid_new[i]] <- c(-99, diff(temp_$rep_size))
+}
+
+con_ac_yr <- con_ac_yr %>%
+  mutate(wide = rep_size > 2,
+         any_hp = hp_FA | hp_FP | hp_R | hp_SA | hp_SM |hp_SS | hp_ST,
+         any_hp2 = hp_FA + hp_FP + hp_R + hp_SA +  hp_SM + hp_SS + hp_ST >= 2,
+         any_p = FA + FP + R + SA + SM + SS + ST >= 1)
+```
+
+```{r}
+#CREDIT: Dumaine et al.
+
+#RECREATION - MAPS
+# ----- setup
+
+if (!(require(pacman))) {install.packages("pacman")}
+pacman::p_load(here, dplyr, stringr, ggplot2, tidyr)
+
+# declare constants, load reshape functions
+
+args <- list(
+  rsvac = "/Users/jayumshu/Downloads/RSVAC_1989_2015_03_29_20.xlsx",
+  functions = "/Users/jayumshu/Downloads/00-reshape-functions.R"
+)
+
+source(args$functions)
+
+# ----- main
+
+conflict_actor <- make_conflict_actor(load_rsvac(args$rsvac), location_name = TRUE) %>%
+  # standardize location names with `map_data` data
+  mutate(location = str_replace_all(location,
+                                    pattern = c("Serbia \\(Yugoslavia\\)"="Serbia",
+                                                "Bosnia-Herzegovina"="Bosnia and Herzegovina",
+                                                "DR Congo \\(Zaire\\)"="Democratic Republic of the Congo",
+                                                "Democratic Republic of Congo \\(Zaire\\)"="Democratic Republic of the Congo",
+                                                "Sri Lanka \\(Ceylon\\)"="Sri Lanka",
+                                                "Myanmar \\(Burma\\)"="Myanmar",
+                                                "Russia \\(Soviet Union\\)"="Russia",
+                                                "^Congo$"="Republic of Congo",
+                                                "Yemen \\(North Yemen\\)"="Yemen",
+                                                "Cote d'Ivoire"="Ivory Coast"))) %>%
+  distinct()
+
+# creating a flag for locations where SV occurred for the merge with the maps data
+sv_locations <- conflict_actor %>%
+  select(location) %>%
+  distinct() %>%
+  mutate(any_sv = TRUE)
+
+# make rebel data
+rebels <- conflict_actor %>%
+  filter(actor_type == 3) %>%
+  group_by(location) %>%
+  mutate(rebel_R = case_when(any(R == 1) ~ 1,
+                             all(R == 0) ~ 0),
+         rebel_SS = case_when(any(SS == 1) ~ 1,
+                              all(SS == 0) ~ 0),
+         rebel_ST = case_when(any(ST == 1) ~ 1,
+                              all(ST == 0) ~ 0)) %>%
+  ungroup() %>%
+  full_join(map_data("world"), by = c("location"="region")) %>%
+  left_join(sv_locations, by = "location") %>%
+  mutate(rebel_R = case_when(is.na(rebel_R) & is.na(any_sv) ~ -1,
+                             is.na(rebel_R) & any_sv ~ 0,
+                             TRUE ~ rebel_R),
+         rebel_SS = case_when(is.na(rebel_SS) & is.na(any_sv) ~ -1,
+                              is.na(rebel_SS) & any_sv ~ 0,
+                              TRUE ~ rebel_SS),
+         rebel_ST = case_when(is.na(rebel_ST) & is.na(any_sv) ~ -1,
+                              is.na(rebel_ST) & any_sv ~ 0,
+                              TRUE ~ rebel_ST))
+
+# make state data
+states <- conflict_actor %>%
+  filter(actor_type %in% c(1, 5)) %>%
+  group_by(location) %>%
+  mutate(state_R=case_when(any(R == 1) ~ 1,
+                           all(R == 0) ~ 0),
+         state_SS=case_when(any(SS == 1) ~ 1,
+                            all(SS == 0) ~ 0),
+         state_ST=case_when(any(ST == 1) ~ 1,
+                            all(ST == 0) ~ 0)) %>%
+  ungroup() %>%
+  full_join(map_data("world"), by = c("location"="region")) %>%
+  left_join(sv_locations, by = "location") %>%
+  mutate(state_R = case_when(is.na(state_R) & is.na(any_sv) ~ -1,
+                             is.na(state_R) & !is.na(any_sv) ~ 0,
+                             TRUE ~ state_R),
+         state_SS = case_when(is.na(state_SS) & is.na(any_sv) ~ -1,
+                              is.na(state_SS) & !is.na(any_sv) ~ 0,
+                              TRUE ~ state_SS),
+         state_ST = case_when(is.na(state_ST) & is.na(any_sv) ~ -1,
+                              is.na(state_ST) & !is.na(any_sv) ~ 0,
+                              TRUE ~ state_ST))
+```
+
+```{r}
+conflict_actor_unique <- conflict_actor[!duplicated(conflict_actor$gwnoloc), ]
+con_ac_yr_location <- merge(con_ac_yr, conflict_actor_unique[, c("gwnoloc", "location")], by = "gwnoloc", all.x = TRUE)
+
+dim(con_ac_yr)
+#622 x 41
+dim(con_ac_yr_location)
+#622 x 42
+
+con_ac_yr_location_grouped <- con_ac_yr_location[order(con_ac_yr_location$location, con_ac_yr_location$year), ]
+
+
+#Necessary packages to load:
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(broom) #assists tidyverse tools 
+library(readr)
+library(lubridate) #date and time 
+#install.packages("ordinal")
+library(ordinal)
+library(MASS) #causes potential problems with select function
+```
+
+```{r}
+#NON-STATE ACTOR DATA
+file_content <- readLines("/Users/jayumshu/Downloads/nsa_v3.4_21November2013.asc", n = 10)
+
+nsa_data <- read.table("/Users/jayumshu/Downloads/nsa_v3.4_21November2013.asc", header = TRUE, sep = "\t", stringsAsFactors = FALSE, fill = TRUE, quote = "\"")
+dim(nsa_data)
+#578 x 43
+
+grouped_nsa_data <- nsa_data[order(nsa_data$side_a), ]
+#print(grouped_nsa_data)
+
+#Eliminate all entries that have a startdate prior to 1989 
+filtered_nsa_data <- grouped_nsa_data %>% 
+  mutate(startdate = as.Date(startdate, format = "%Y-%m-%d")) %>%
+  filter(startdate >= as.Date("1989-01-01"))
+
+#IN RSVAC df, only keep entries where actor_type = 3
+filtered_RSVAC_data <- con_ac_yr_location_grouped %>%
+  filter(actor_type == 3)
+#print(filtered_RSVAC_data)
+
+#Converting ucdpid to conflictid_new in NSA using translate_conf
+translate_conf <- read_csv("/Users/jayumshu/Downloads/translate_conf.csv")
+head(translate_conf)
+translate_conf$old_id <- as.double(translate_conf$old_id)
+translate_conf <- translate_conf %>% 
+  rename(conflictid_new = new_id, ucdpid = old_id)
+
+filtered_nsa_data <- filtered_nsa_data %>% 
+  left_join(translate_conf %>% dplyr::select(conflictid_new, ucdpid), by = "ucdpid")
+
+translate_dyad <- read_csv("/Users/jayumshu/Downloads/translate_dyad.csv")
+translate_dyad <- translate_dyad %>% 
+  rename(dyadid = old_id, dyadid_new = new_id)
+
+#Seeing which conflictid_new values are in both the RSVAC and NSA dataframes 
+common_conflicts <- filtered_nsa_data %>%
+  filter(conflictid_new %in% filtered_RSVAC_data$conflictid_new) %>%
+  group_by(conflictid_new)
+
+actor_dataset <- read_csv("/Users/jayumshu/Downloads/ucdp-actor-241.csv")
+actor_dataset <- actor_dataset %>%
+  rename(actorid_new = ActorId, dyadid_new = DyadId, conflictid_new = ConflictId, rebel_group_name = NameData)
+
+non_unique_dyadid <- translate_dyad %>%
+  group_by(dyadid) %>%
+  filter(n() > 1) %>%
+  arrange(dyadid)
+#print(non_unique_dyadid)
+common_nonunique_dyads <- non_unique_dyadid %>%
+  filter(dyadid %in% common_conflicts$dyadid)
+#print(common_nonunique_dyads)
+#Remove all over 1000 and anything with "Civilians" in name 
+#Remove from common_nonunique_dyads and then remove from translate_dyad
+filtered_dyads <- common_nonunique_dyads %>%
+  filter(!(dyadid_new > 1000 | grepl("Civilians", name, ignore.case = TRUE)))
+#print(filtered_dyads)
+filtered_translate_dyad <- translate_dyad %>%
+  filter(!(dyadid_new > 1000 & dyadid_new <= 10000 | grepl("Civilians", name, ignore.case = TRUE)))
+
+filtered_common_conflicts <- common_conflicts %>%
+  left_join(filtered_translate_dyad %>% dplyr::select(dyadid, dyadid_new, name), by = "dyadid")
+
+filtered_common_conflicts <- filtered_common_conflicts %>%
+  separate(name, into = c("state_name", "rebel_group_name"), sep = " - ", extra = "merge")
+#153 obs
+
+unique_actor_dataset <- actor_dataset %>%
+  dplyr::select(rebel_group_name, actorid_new) %>%
+  distinct()
+filtered_common_conflicts1 <- filtered_common_conflicts %>%
+  left_join(unique_actor_dataset %>% dplyr::select(rebel_group_name, actorid_new), by = "rebel_group_name")
+
+#Eliminate actorid_new = 289, 3554, 470, 8114, 175, 486, 566, 361
+excluded_actorids <- c(289, 3554, 470, 8114, 175, 486, 566, 361)
+filtered_common_conflicts1 <- filtered_common_conflicts1 %>%
+  filter(!actorid_new %in% excluded_actorids)
+head(filtered_common_conflicts1)
+
+#Consolidated view of dataframe
+included_columns <- c("startdate", "enddate", "rebpolwing", "rebpolwinglegal", "rebestimate", "rebstrength", "centcontrol", "strengthcent", "mobcap", "fightcap", "conflicttype", "rebel.support", "rtypesup", "rsupname", "type.of.termination", "prevactive", "conflictid_new", "dyadid_new", "state_name", "rebel_group_name", "actorid_new")
+consolidated_common_conflicts <- filtered_common_conflicts1 %>%
+  dplyr::select(all_of(included_columns))
+
+filtered_RSVAC_data1 <- filtered_RSVAC_data
+
+#For which locations in RSVAC are there duplicate year values?
+mult_rebels_same_conflict <- filtered_RSVAC_data1 %>%
+  group_by(location, year) %>%
+  filter(n() > 1) %>%
+  summarize(actorid_new = paste(unique(actorid_new), collapse = ", "), .groups = "drop")
+#print(mult_rebels_same_conflict)
+
+#JOINING THE TWO DATAFRAMES
+# Ensure startdate and enddate are in Date format
+consolidated_common_conflicts <- consolidated_common_conflicts %>%
+  mutate(startdate = as.Date(startdate),
+         enddate = as.Date(enddate))
+
+# Split into unique and multiple observations
+obs_counts <- consolidated_common_conflicts %>%
+  group_by(actorid_new, conflictid_new) %>%
+  tally(name = "count")
+
+# Separate single and multiple observations
+single_obs <- consolidated_common_conflicts %>%
+  inner_join(obs_counts %>% filter(count == 1), by = c("actorid_new", "conflictid_new"))
+
+multiple_obs <- consolidated_common_conflicts %>%
+  inner_join(obs_counts %>% filter(count > 1), by = c("actorid_new", "conflictid_new"))
+
+single_obs <- single_obs %>%
+  mutate(startdate = as.Date(startdate),
+         enddate = as.Date(enddate))
+
+# Perform the join and filter based on the date range condition
+matched_single <- filtered_RSVAC_data1 %>%
+  inner_join(
+    single_obs %>%
+      dplyr::select(actorid_new, conflictid_new, startdate, enddate,
+             strengthcent, centcontrol, rebestimate,
+             mobcap, fightcap, state_name, rebel_group_name),
+    by = c("actorid_new", "conflictid_new")
+  ) %>%
+  filter(year >= year(startdate) & year <= year(enddate)) %>%
+  dplyr::select(-startdate, -enddate) %>%
+  distinct()
+
+# Join multiple observations using range matching
+# Convert `startdate` and `enddate` in `multiple_obs` to Date format
+multiple_obs <- multiple_obs %>%
+  mutate(startdate = as.Date(startdate),
+         enddate = as.Date(enddate))
+
+# Perform the join and filter based on the date range condition
+matched_multiple <- filtered_RSVAC_data1 %>%
+  inner_join(
+    multiple_obs %>%
+      dplyr::select(actorid_new, conflictid_new, startdate, enddate,
+             strengthcent, centcontrol, rebestimate,
+             mobcap, fightcap, state_name, rebel_group_name),
+    by = c("actorid_new", "conflictid_new")
+  ) %>%
+  filter(year >= year(startdate) & year <= year(enddate)) %>%
+  dplyr::select(-startdate, -enddate) %>%
+  distinct()  # Remove duplicates if necessary
+
+# Combine single and range-matched results
+final_result <- bind_rows(matched_single, matched_multiple) %>%
+  distinct()
+```
+
+```{r}
+#Identifying predictors causing separation
+# Cross-tabulate predictors and dependent variable
+table(final_result$mobcap, final_result$R_score)
+table(final_result$fightcap, final_result$R_score)
+table(final_result$centcontrol, final_result$R_score)
+
+#Collapsing moderate and high to avoid perfect separation error 
+final_result <- final_result %>%
+  mutate(
+    mobcap = ifelse(mobcap == "high", "moderate", mobcap),
+    fightcap = ifelse(fightcap == "high", "moderate", fightcap)
+  )
+
+final_clean <- final_result %>%
+  filter(
+    !is.na(mobcap),
+    !is.na(fightcap),
+    !is.na(centcontrol),
+    !is.na(rebestimate),
+    !is.na(R_score)
+  )
+
+# Ensure factors are correctly specified
+final_clean <- final_clean %>%
+  mutate(
+    R_score = as.factor(R_score),                      # Dependent variable
+    mobcap = factor(mobcap, levels = c("low", "moderate"), ordered = TRUE),  # Independent variable 1
+    fightcap = factor(fightcap, levels = c("low", "moderate"), ordered = TRUE),  # Independent variable 2
+    centcontrol = factor(centcontrol, levels = c("no", "yes"))  # Control variable
+  )
+
+final_clean1 <- final_clean %>%
+  mutate(strengthcent = ifelse(is.na(strengthcent), "none", strengthcent))
+
+#Converting R_score
+final_clean1 <- final_clean1 %>%
+  mutate(R_score_converted = ifelse(R_score %in% c(0, 1), "low", "high"))
+
+#Convert R_score_converted and strengthcent to factors
+final_clean1 <- final_clean1 %>%
+  mutate(R_score_converted = factor(R_score_converted, levels = c("low", "high")))
+final_clean1 <- final_clean1 %>%
+  mutate(strengthcent = factor(strengthcent, levels = c("none", "low", "moderate", "high")))
+
+
+#DATASET CHARACTERISTICS 
+# Find the earliest and latest years
+earliest_year <- min(final_clean1$year, na.rm = TRUE)
+latest_year <- max(final_clean1$year, na.rm = TRUE)
+print(earliest_year)
+print(latest_year)
+
+# Count the number of unique actorid_new
+print(length(unique(final_clean1$actorid_new)))
+print(length(unique(final_clean1$conflictid_new)))
+print(length(unique(single_obs$conflictid_new)))
+
+
+#INITIAL REGRESSION
+# Fit the binary logistic regression model
+model_blr <- glm(R_score_converted ~ mobcap + fightcap + strengthcent, 
+             data = final_clean1, 
+             family = binomial)
+
+# Summary of the model
+summary(model_blr)
+
+# Deviance residuals
+deviance_residuals_blr <- residuals(model_blr, type = "deviance")
+
+#RESIDUALS VS FITTED VALUES
+plot(fitted(model_blr), deviance_residuals_blr, 
+     xlab = "Fitted Values", 
+     ylab = "Deviance Residuals", 
+     main = "Residuals vs Fitted Values", 
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lwd = 2)
+
+#RESIDUALS BY PREDICTOR
+#Residuals vs fightcap
+boxplot(deviance_residuals_blr ~ final_clean1$fightcap, 
+        main = "Residuals vs fightcap", 
+        xlab = "fightcap", ylab = "Deviance Residuals", 
+        col = "lightgreen")
+
+#Residuals vs strengthcent 
+boxplot(deviance_residuals_blr ~ final_clean1$strengthcent,
+        main = "Residuals vs strengthcent",
+        xlab = "strengthcent", ylab = "Deviance Residuals",
+        col = "lightblue")
+```
+
+```{r}
+#DATA EXPLORATION - FOR MODEL JUSTIFICATION 
+final_result_view <- bind_rows(matched_single, matched_multiple) %>%
+  distinct()
+
+#BARPLOTS
+final_result_view <- final_result_view %>%
+  filter(
+    !is.na(mobcap),
+    !is.na(fightcap),
+    !is.na(centcontrol),
+    !is.na(rebestimate),
+    !is.na(R_score)
+  )
+
+final_result_view <- final_result_view %>%
+  mutate(strengthcent = ifelse(is.na(strengthcent), "none", strengthcent))
+
+final_result_view <- final_result_view %>%
+  mutate(
+    R_score = factor(R_score, levels = c(0, 1, 2, 3)),                      # Dependent variable
+    mobcap = factor(mobcap, levels = c("low", "moderate", "high"), ordered = TRUE),  
+    fightcap = factor(fightcap, levels = c("low", "moderate", "high"), ordered = TRUE),  
+    strengthcent = factor(strengthcent, levels = c("none", "low", "moderate", "high"), ordered = TRUE)
+  )
+
+# Define a gradient of colors from light to dark
+colors <- c("lightgreen", "yellow", "orange", "red")
+r_score_table <- table(final_result_view$R_score)
+# Plot the barplot
+bar_positions <- barplot(
+  r_score_table,
+  main = "Frequency of R_score",
+  xlab = "R_score",
+  ylab = "Frequency",
+  col = colors,
+  ylim = c(0, max(r_score_table) + 5)
+)
+# Add a legend with an intensity gradient
+legend(
+  x = mean(bar_positions),  # Move legend significantly farther right
+  y = max(r_score_table) + 5,  # Position of the legend
+  legend = c(
+    "0 = no reported rape",
+    "1 = isolated reports of rape",
+    "2 = widespread/frequent reports of rape",
+    "3 = massive/systematic reports of rape"
+  ),
+  fill = colors,
+  title = "R_score Categories",
+  xpd = TRUE
+)
+
+
+barplot(table(final_result_view$mobcap),
+        main = "Frequency of mobilization capacity",
+        xlab = "mobcap",
+        ylab = "Frequency",
+        col = "grey")
+barplot(table(final_result_view$fightcap),
+        main = "Frequency of fighting capacity",
+        xlab = "fightcap",
+        ylab = "Frequency",
+        col = "grey")
+barplot(table(final_result_view$strengthcent),
+        main = "Frequency of strength of centralization",
+        xlab = "strengthcent",
+        ylab = "Frequency",
+        col = "grey")
+
+
+# Contingency table
+table_R_score_strengthcent <- table(final_result_view$R_score, final_result_view$strengthcent)
+#print(table_R_score_strengthcent)
+
+# Stacked barplot
+barplot(table_R_score_strengthcent,
+        beside = FALSE,
+        col = c("lightgreen", "yellow", "orange", "red"), # Colors for R_score levels
+        legend = rownames(table_R_score_strengthcent),
+        main = "R_score by Strength of Centralization",
+        xlab = "Strength of Centralization",
+        ylab = "Frequency")
+```
+
+```{r}
+#FINAL REGRESSION
+single_obs2 <- single_obs %>%
+  mutate(startdate = as.Date(startdate),
+         enddate = as.Date(enddate))
+
+matched_single2 <- filtered_RSVAC_data1 %>%
+  inner_join(
+    single_obs2 %>%
+      dplyr::select(actorid_new, conflictid_new, startdate, enddate,
+             strengthcent, centcontrol, rebestimate,
+             mobcap, fightcap, state_name, rebel_group_name, conflicttype),
+    by = c("actorid_new", "conflictid_new")
+  ) %>%
+  filter(year >= year(startdate) & year <= year(enddate)) %>%
+  dplyr::select(-startdate, -enddate) %>%
+  distinct()
+
+multiple_obs2 <- multiple_obs %>%
+  mutate(startdate = as.Date(startdate),
+         enddate = as.Date(enddate))
+
+matched_multiple2 <- filtered_RSVAC_data1 %>%
+  inner_join(
+    multiple_obs2 %>%
+      dplyr::select(actorid_new, conflictid_new, startdate, enddate,
+             strengthcent, centcontrol, rebestimate,
+             mobcap, fightcap, state_name, rebel_group_name, conflicttype),
+    by = c("actorid_new", "conflictid_new")
+  ) %>%
+  filter(year >= year(startdate) & year <= year(enddate)) %>%
+  dplyr::select(-startdate, -enddate) %>%
+  distinct()  # Remove duplicates if necessary
+
+final_result_new <- bind_rows(matched_single2, matched_multiple2) %>%
+  distinct()
+
+
+final_result_new <- final_result_new %>%
+  mutate(
+    mobcap = ifelse(mobcap == "high", "moderate", mobcap),
+    fightcap = ifelse(fightcap == "high", "moderate", fightcap)
+  )
+
+final_clean_new <- final_result_new %>%
+  filter(
+    !is.na(mobcap),
+    !is.na(fightcap),
+    !is.na(centcontrol),
+    !is.na(rebestimate),
+    !is.na(R_score)
+  )
+
+# Ensure factors are correctly specified
+final_clean_new <- final_clean_new %>%
+  mutate(
+    R_score = as.factor(R_score),                      # Dependent variable
+    mobcap = factor(mobcap, levels = c("low", "moderate"), ordered = TRUE),  # Independent variable 1
+    fightcap = factor(fightcap, levels = c("low", "moderate"), ordered = TRUE),  # Independent variable 2
+    centcontrol = factor(centcontrol, levels = c("no", "yes"))  # Control variable
+  )
+
+final_clean_new1 <- final_clean_new %>%
+  mutate(strengthcent = ifelse(is.na(strengthcent), "none", strengthcent))
+
+#Converting R_score
+final_clean_new1 <- final_clean_new1 %>%
+  mutate(R_score_converted = ifelse(R_score %in% c(0, 1), "low", "high"))
+
+#Convert R_score_converted and strengthcent to factors
+final_clean_new1 <- final_clean_new1 %>%
+  mutate(R_score_converted = factor(R_score_converted, levels = c("low", "high")))
+final_clean_new1 <- final_clean_new1 %>%
+  mutate(strengthcent = factor(strengthcent, levels = c("none", "low", "moderate", "high")))
+
+
+#DEALING WITH THE NEW CONTROLS - REBESTIMATE AND CONFLICTTYPE
+#write.csv(final_clean_new1, "final_clean_new1", row.names = FALSE)
+final_clean_new1$ln_rebestimate <- log(final_clean_new1$rebestimate + 1)  # Adding 1 to avoid log(0)
+final_clean_new1$secessionist <- ifelse(final_clean_new1$conflicttype == "secessionist conflict", 1, 0)
+final_clean_new1$ethnic <- ifelse(final_clean_new1$conflicttype == "ethnic conflict", 1, 0)
+#head(final_clean_new1)
+
+#unique(final_clean_new1$conflicttype)
+final_clean_new1$coup <- ifelse(final_clean_new1$conflicttype == "coup d'etat", 1, 0)
+
+# Convert R_score_converted to numeric (0 and 1) in a new column
+final_clean_new1$R_score_binary <- ifelse(final_clean_new1$R_score_converted == "low", 0, 
+                                  ifelse(final_clean_new1$R_score_converted == "high", 1, NA))
+
+
+#Load Additional Packages
+library(lme4)
+#install.packages("car")
+library(car) #For VIF and diagnostic tools (optional)
+#install.packages("glmmTMB")
+library(glmmTMB)
+#install.packages("arm")
+library(arm)
+#install.packages("geepack")
+library(geepack)
+
+# Fit the GEE model
+model_gee <- geeglm(R_score_binary ~ strengthcent + fightcap + mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = final_clean_new1,
+                    family = binomial,  # Logistic regression
+                    corstr = "independence")  # Correlation structure
+#Exchangeable means correlation structure accounts for the fact that obs within the same cluster actorid_new are correlated
+summary(model_gee)
+
+model_gee15 <- geeglm(R_score_binary ~ strengthcent + fightcap + mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = final_clean_new1,
+                    family = binomial,  # Logistic regression
+                    corstr = "exchangeable")  # Correlation structure
+summary(model_gee15)
+#^Brings the standard errors down 
+
+#Remove fightcap (possible multicollinearity by including strengthcent, mobcap, and fightcap)
+model_gee2 <- geeglm(R_score_binary ~ strengthcent + mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = final_clean_new1,
+                    family = binomial,  # Logistic regression
+                    corstr = "exchangeable")  # Correlation structure
+summary(model_gee2)
+
+model_gee25 <- geeglm(R_score_binary ~ strengthcent + mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = final_clean_new1,
+                    family = binomial,  # Logistic regression
+                    corstr = "ar1")  # Correlation structure
+summary(model_gee25)
+
+model_gee6 <- geeglm(R_score_binary ~ strengthcent + fightcap * mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = final_clean_new1,
+                    family = binomial,  # Logistic regression
+                    corstr = "exchangeable")  # Correlation structure
+summary(model_gee6)
+#Using GEE AND GEE6 in final analysis
+```
+
+```{r}
+#RESIDUALS VS FITTED VALUES
+pearson_residuals_gee6 <- residuals(model_gee6, type = "pearson")
+pearson_residuals_gee <- residuals(model_gee, type = "pearson")
+residuals_range <- range(c(pearson_residuals_gee6, pearson_residuals_gee))
+
+plot(fitted(model_gee6), pearson_residuals_gee6, 
+     xlab = "Fitted Values", 
+     ylab = "Pearson Residuals", 
+     main = "Residuals vs Fitted Values (Improved Model)", 
+     pch = 20, col = "blue",
+     ylim = residuals_range)
+abline(h = 0, col = "red", lwd = 2)
+
+plot(fitted(model_gee), pearson_residuals_gee, 
+     xlab = "Fitted Values", 
+     ylab = "Pearson Residuals", 
+     main = "Residuals vs Fitted Values (Initial Model)", 
+     pch = 20, col = "blue",
+     ylim = residuals_range)
+abline(h = 0, col = "red", lwd = 2)
+
+#RESIDUALS BY PREDICTOR
+# Improved Model Boxplot
+boxplot(pearson_residuals_gee6 ~ final_clean_new1$strengthcent,
+        main = "Residuals vs strengthcent (Improved Model)",
+        xlab = "strengthcent",
+        ylab = "Pearson Residuals",
+        col = "lightblue",
+        ylim = residuals_range)  # Scale y-axis to the same range
+
+# Base GEE Model Boxplot
+boxplot(pearson_residuals_gee ~ final_clean_new1$strengthcent,
+        main = "Residuals vs strengthcent (Initial Model)",
+        xlab = "strengthcent",
+        ylab = "Pearson Residuals",
+        col = "lightblue",
+        ylim = residuals_range)  # Scale y-axis to the same range
+
+
+#TRYING AR MODEL
+model_gee_ar6 <- geeglm(R_score_binary ~ strengthcent + fightcap * mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = final_clean_new1,
+                    family = binomial,  # Logistic regression
+                    corstr = "ar1")  # Correlation structure
+summary(model_gee_ar6)
+
+pearson_residuals_gee_ar6 <- residuals(model_gee_ar6, type = "pearson")
+
+#RESIDUALS VS FITTED VALUES
+plot(fitted(model_gee_ar6), pearson_residuals_gee_ar6, 
+     xlab = "Fitted Values", 
+     ylab = "Pearson Residuals", 
+     main = "Residuals vs Fitted Values", 
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lwd = 2)
+#^More or less looks the same
+```
+
+```{r}
+#Effects Plot
+# Create a dataset for prediction with strengthcent categories
+new_data <- data.frame(
+  strengthcent = factor(c("none", "low", "moderate", "high"), 
+                        levels = c("none", "low", "moderate", "high"), 
+                        ordered = TRUE),  # Ordered factor for strengthcent
+  fightcap = "moderate",                               # Fixed value for fightcap
+  mobcap = "low"                                       # Fixed value for mobcap
+)
+
+# Add default or mean values for other variables
+new_data$secessionist <- 0  # Default category (e.g., no secessionist conflict)
+new_data$ethnic <- 0        # Default category (e.g., no ethnic conflict)
+new_data$coup <- 0          # Default category (e.g., no coup)
+new_data$ln_rebestimate <- mean(final_clean_new1$ln_rebestimate, na.rm = TRUE)  # Mean value for ln_rebestimate
+
+# Predict probabilities for the new dataset
+predicted_probs <- predict(model_gee6, newdata = new_data, type = "response")
+
+# Convert probabilities to odds
+predicted_odds <- predicted_probs / (1 - predicted_probs)
+
+# Add predictions to the new dataset
+new_data$predicted_odds <- predicted_odds
+
+# Plot the odds against strengthcent
+ggplot(new_data, aes(x = strengthcent, y = predicted_odds)) +
+  geom_line(size = 1, color = "blue", group = 1) +  # Line for predicted odds
+  geom_point(size = 3, color = "blue") +           # Points for predicted odds
+  labs(
+    title = "Effect of Strengthcent on Odds of R_score_binary = 1",
+    x = "Strengthcent",
+    y = "Predicted Odds"
+  ) +
+  theme_minimal() +
+  scale_y_continuous(trans = "log", labels = scales::comma)  # Log scale for odds
+```
+
+```{r}
+#Simulation for what completely random errors would look like for binary logistic regression 
+# Simulate binary logistic regression data
+# Simulation for GEE
+set.seed(2026)  # For reproducibility
+n_clusters <- 50  # Number of clusters
+cluster_size <- 10  # Observations per cluster
+n <- n_clusters * cluster_size  # Total observations
+
+# Generate cluster IDs
+cluster_id <- rep(1:n_clusters, each = cluster_size)
+
+# Simulate predictors
+x <- rnorm(n)  # Predictor variable
+
+# Add cluster-level random effects for correlation
+random_effects <- rep(rnorm(n_clusters, mean = 0, sd = 0.5), each = cluster_size)
+
+# Linear predictor with random effects
+logit_p <- -1 + 2 * x + random_effects
+
+# Transform to probabilities using the logistic function
+probabilities <- exp(logit_p) / (1 + exp(logit_p))
+
+# Simulate binary outcomes
+y <- rbinom(n, size = 1, prob = probabilities)
+
+# Combine into a data frame
+data_sim <- data.frame(cluster_id = cluster_id, x = x, y = y)
+
+# Fit a GEE model
+gee_model_sim <- geeglm(
+  formula = y ~ x,
+  data = data_sim,
+  id = cluster_id,          # Grouping variable for correlation
+  family = binomial(link = "logit"),
+  corstr = "exchangeable"   # Exchangeable correlation structure
+)
+
+# Summarize the GEE model
+summary(gee_model_sim)
+
+# Calculate residuals and predicted probabilities
+residuals_gee_sim <- residuals(gee_model_sim, type = "pearson")
+predicted_probs_gee_sim <- predict(gee_model_sim, type = "response")
+
+# Create a residual plot for the GEE model
+ggplot(data.frame(predicted_probs_gee_sim, residuals_gee_sim), aes(x = predicted_probs_gee_sim, y = residuals_gee_sim)) +
+  geom_point(alpha = 0.5) +  # Add points with transparency
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +  # Horizontal line at 0
+  labs(
+    title = "Residual Plot for GEE Model (Simulation)",
+    x = "Predicted Probabilities",
+    y = "Pearson Residuals"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#USING SVAC DATASET TO FURTHER EVALUATE EXTERNAL VALIDITY
+SVAC_data <- read_excel("/Users/jayumshu/Downloads/SVAC_3.2_conflictyears.xlsx")
+
+#FIRST, narrow down SVAC to only actors in the final_clean_new1
+#print(filtered_SVAC_data)
+
+filtered_SVAC_data <- SVAC_data %>%
+  filter(actorid %in% final_clean_new1$actorid_new)
+
+#SECOND, change all values of -99 in state_prev, ai_prev, hrw_prev, and form to NA 
+#If all values in state_prev, ai_prev, or hrw_prev = 0 OR form column does not include the number 1, make R_score_binary column = 0 
+# Modify the filtered_SVAC_data
+filtered_SVAC_data <- filtered_SVAC_data %>%
+  # Replace -99 with NA for numeric columns only
+  mutate(across(c(state_prev, ai_prev, hrw_prev), ~ na_if(., -99))) %>%
+  mutate(form = na_if(form, "-99")) %>% # Handle form separately if it's a character
+  # Add the R_score_binary column based on the conditions
+  mutate(
+    R_score_binary = case_when(
+      # Treat NA as non-blocking (assume NA is equivalent to 0 in conditions)
+      (coalesce(state_prev, 0) == 0 & coalesce(ai_prev, 0) == 0 & coalesce(hrw_prev, 0) == 0) |
+      !str_detect(as.character(form), "1") ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+#THIRD, combine with non-state actor data
+filtered_SVAC_data <- filtered_SVAC_data %>%
+  mutate(actorid_new = actorid, conflictid_new = conflictid)
+
+SVAC_matched_single <- filtered_SVAC_data %>%
+  inner_join(
+    single_obs %>%
+      dplyr::select(actorid_new, conflictid_new, startdate, enddate,
+             strengthcent, centcontrol, rebestimate,
+             mobcap, fightcap, state_name, rebel_group_name, conflicttype),
+    by = c("actorid_new", "conflictid_new")
+  ) %>%
+  filter(year >= year(startdate) & year <= year(enddate)) %>%
+  dplyr::select(-startdate, -enddate) %>%
+  distinct()
+
+SVAC_matched_multiple <- filtered_SVAC_data %>%
+  inner_join(
+    multiple_obs %>%
+      dplyr::select(actorid_new, conflictid_new, startdate, enddate,
+             strengthcent, centcontrol, rebestimate,
+             mobcap, fightcap, state_name, rebel_group_name, conflicttype),
+    by = c("actorid_new", "conflictid_new")
+  ) %>%
+  filter(year >= year(startdate) & year <= year(enddate)) %>%
+  dplyr::select(-startdate, -enddate) %>%
+  distinct()  # Remove duplicates if necessary
+
+# Combine single and range-matched results
+SVAC_final_result <- bind_rows(SVAC_matched_single, SVAC_matched_multiple) %>%
+  distinct()
+
+#FOURTH, merge
+#Limit to entries where R_score_binary does not equal 0
+SVAC_final_result <- SVAC_final_result %>% 
+  filter(R_score_binary == 0)
+
+SVAC_final_result <- SVAC_final_result %>% 
+  filter(actor_type == 3)
+
+#Convert mobcap and fightcap high to moderate
+#Convert strengthcent NA to none
+SVAC_final_result <- SVAC_final_result %>%
+  mutate(
+    mobcap = ifelse(mobcap == "high", "moderate", mobcap),
+    fightcap = ifelse(fightcap == "high", "moderate", fightcap)
+  )
+
+SVAC_final_result <- SVAC_final_result %>%
+  filter(
+    !is.na(mobcap),
+    !is.na(fightcap),
+    !is.na(centcontrol),
+    !is.na(rebestimate)
+  )
+
+# Ensure factors are correctly specified
+SVAC_final_result <- SVAC_final_result %>%
+  mutate(
+    mobcap = factor(mobcap, levels = c("low", "moderate"), ordered = TRUE),  # Independent variable 1
+    fightcap = factor(fightcap, levels = c("low", "moderate"), ordered = TRUE),  # Independent variable 2
+    centcontrol = factor(centcontrol, levels = c("no", "yes"))  # Control variable
+  )
+
+SVAC_final_result <- SVAC_final_result %>%
+  mutate(strengthcent = ifelse(is.na(strengthcent), "none", strengthcent))
+
+#Convert R_score_converted and strengthcent to factors
+SVAC_final_result <- SVAC_final_result %>%
+  mutate(strengthcent = factor(strengthcent, levels = c("none", "low", "moderate", "high")))
+
+SVAC_final_result$ln_rebestimate <- log(SVAC_final_result$rebestimate + 1)  # Adding 1 to avoid log(0)
+SVAC_final_result$secessionist <- ifelse(SVAC_final_result$conflicttype == "secessionist conflict", 1, 0)
+SVAC_final_result$ethnic <- ifelse(SVAC_final_result$conflicttype == "ethnic conflict", 1, 0)
+SVAC_final_result$coup <- ifelse(SVAC_final_result$conflicttype == "coup d'etat", 1, 0)
+
+#ADD rows (grouping the same actorid_new and conflictid_new together). For all columns in final_clean_new1 not in SVAC_final_result, leave value NA. For columns in SVAC_final_result but not in final_clean_new1, ignore. 
+
+common_columns <- intersect(names(SVAC_final_result), names(final_clean_new1))
+# Select only the common columns from SVAC_final_result
+SVAC_final_result_filtered <- SVAC_final_result %>%
+  dplyr::select(all_of(common_columns))
+
+final_clean_new1_filtered <- final_clean_new1 %>%
+  dplyr::select(all_of(common_columns))
+
+#Adding the rows, grouped by location
+combined_sexualviolence_data <- bind_rows(SVAC_final_result_filtered, final_clean_new1_filtered) %>%
+  arrange(location, actorid_new, year)
+
+#Check that there are no repeat years for observations with the same actorid_new
+duplicates_check <- combined_sexualviolence_data %>%
+  group_by(actorid_new) %>%
+  filter(duplicated(year)) %>%
+  ungroup()
+
+# Display duplicate entries, if any
+if (nrow(duplicates_check) > 0) {
+  print("Duplicate years found for the following actorid_new:")
+  print(duplicates_check)
+} else {
+  print("No duplicate years found for any actorid_new.")
+}
+
+combined_sexualviolence_data <- combined_sexualviolence_data %>%
+  distinct(actorid_new, year, .keep_all = TRUE)
+
+#Check in final_clean_new1 for actorid_new that have 0 for R_score for all years recorded 
+actors_all_zero_R_score <- final_clean_new1 %>%
+  group_by(actorid_new) %>%  # Group by actorid_new
+  summarise(all_zero = all(R_score == 0, na.rm = TRUE)) %>%  # Check if all R_score are 0
+  filter(all_zero) %>%  # Keep only those where all_zero is TRUE
+  pull(actorid_new)  # Extract the actorid_new
+#print(actors_all_zero_R_score)
+
+combined_sexualviolence_data <- combined_sexualviolence_data %>%
+  filter(!actorid_new %in% actors_all_zero_R_score)
+
+
+#REGRESSION
+#head(combined_sexualviolence_data)
+model_gee_ar_sv1 <- geeglm(R_score_binary ~ strengthcent + fightcap * mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = combined_sexualviolence_data,
+                    family = binomial,  # Logistic regression
+                    corstr = "ar1")  # Correlation structure
+summary(model_gee_ar_sv1)
+
+pearson_residuals_geearsv1 <- residuals(model_gee_ar_sv1, type = "pearson")
+
+plot(fitted(model_gee_ar_sv1), pearson_residuals_geearsv1, 
+     xlab = "Fitted Values", 
+     ylab = "Pearson Residuals", 
+     main = "Residuals vs Fitted Values", 
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lwd = 2)
+
+model_gee_ar_sv15 <- geeglm(R_score_binary ~ strengthcent + fightcap * mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = combined_sexualviolence_data,
+                    family = binomial,  # Logistic regression
+                    corstr = "exchangeable")  # Correlation structure
+summary(model_gee_ar_sv15)
+
+pearson_residuals_geearsv15 <- residuals(model_gee_ar_sv15, type = "pearson")
+
+plot(fitted(model_gee_ar_sv15), pearson_residuals_geearsv15, 
+     xlab = "Fitted Values", 
+     ylab = "Pearson Residuals", 
+     main = "Residuals vs Fitted Values", 
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lwd = 2)
+
+model_gee_ar_sv5 <- geeglm(R_score_binary ~ strengthcent * year + mobcap + secessionist + ethnic + coup + ln_rebestimate,
+                    id = actorid_new, 
+                    data = combined_sexualviolence_data,
+                    family = binomial,  # Logistic regression
+                    corstr = "exchangeable")  # Correlation structure
+summary(model_gee_ar_sv5)
+
+pearson_residuals_geearsv5 <- residuals(model_gee_ar_sv5, type = "pearson")
+
+plot(fitted(model_gee_ar_sv5), pearson_residuals_geearsv5, 
+     xlab = "Fitted Values", 
+     ylab = "Pearson Residuals", 
+     main = "Residuals vs Fitted Values", 
+     pch = 20, col = "blue")
+abline(h = 0, col = "red", lwd = 2)
+
+boxplot(pearson_residuals_geearsv5 ~ combined_sexualviolence_data$strengthcent,
+        main = "Residuals vs strengthcent",
+        xlab = "strengthcent", ylab = "Pearson Residuals",
+        col = "lightblue")
+```
+
+
+
+
+
+
+
+
